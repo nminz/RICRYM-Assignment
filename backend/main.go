@@ -6,45 +6,43 @@ import (
     "github.com/brianvoe/gofakeit/v6"
 )
 
-// account table model
-type Account struct {
+///////////////////////////Accounts table model
+
+type Accounts struct {
     AccID    int64  `pg:"acc_id,pk"`
     Username string `pg:"username"`
     Email    string `pg:"email"`
 }
 
-// character table model
-type Character struct {
+///////////////////////////Characters table model
+
+type Characters struct {
     CharID  int64  `pg:"char_id,pk"`
     AccID   int64  `pg:"acc_id"`
     ClassID int    `pg:"class_id"`
 }
 
-// scores table model
-type Score struct {
+///////////////////////////Scores table model
+
+type Scores struct {
     ScoreID     int64 `pg:"score_id,pk"`
     CharID      int64 `pg:"char_id"`
     RewardScore int   `pg:"reward_score"`
 }
 
+///////////////////////////Connect to PostgreSQL
+
 func connect() *pg.DB {
-    
     db := pg.Connect(&pg.Options{
         User:     "postgres",       
-        Password: "oredayak1",  
+        Password: "oredayak1",      
         Addr:     "localhost:5432", 
-        Database: "wira_db", 
+        Database: "wira_db",        
     })
 
+    /////////////////////////////////////connection test
 
-
-
-
-
-
-///////////////connection test
-
-	var n int
+    var n int
     _, err := db.QueryOne(pg.Scan(&n), "SELECT 1")
     if err != nil {
         fmt.Println("Could not connect to the database:", err)
@@ -57,29 +55,30 @@ func connect() *pg.DB {
 
 
 
-///////////////creating tables
+
+
+///////////////////////////////create tables in the db
+
 
 func createTables(db *pg.DB) {
-    // Create Account table
-    err := db.Model((*Account)(nil)).CreateTable(&pg.CreateTableOptions{
-        IfNotExists: true,
-    })
+	
+    //Accounts table
+
+    err := db.Model((*Accounts)(nil)).CreateTable(nil)
     if err != nil {
         panic(err)
     }
 
-    // Create Character table
-    err = db.Model((*Character)(nil)).CreateTable(&pg.CreateTableOptions{
-        IfNotExists: true,
-    })
+    //Characters table
+
+    err = db.Model((*Characters)(nil)).CreateTable(nil)
     if err != nil {
         panic(err)
     }
 
-    // Create Scores table
-    err = db.Model((*Score)(nil)).CreateTable(&pg.CreateTableOptions{
-        IfNotExists: true,
-    })
+    //Scores table
+
+    err = db.Model((*Scores)(nil)).CreateTable(nil)
     if err != nil {
         panic(err)
     }
@@ -88,15 +87,12 @@ func createTables(db *pg.DB) {
 }
 
 
+//////////////////////////////generate 100,000 data with gofakeit and insert into wira_db
 
-
-
-/////////////////gofakeit
 
 func generateFakeData(db *pg.DB) {
-
     for i := 0; i < 100000; i++ {
-        account := &Account{
+        account := &Accounts{
             Username: gofakeit.Username(),
             Email:    gofakeit.Email(),
         }
@@ -106,25 +102,28 @@ func generateFakeData(db *pg.DB) {
             return
         }
 
-        //each account, generate 8 characters(classes)
+        accID := account.AccID
+
+        ///////////////////////////each account, generate 8 characters (classes)
 
         for j := 0; j < 8; j++ {
-            character := &Character{
-                AccID:   account.AccID,
-                ClassID: gofakeit.Number(1, 8), // Random class ID between 1 and 8
+            character := &Characters{
+                AccID:   accID,
+                ClassID: gofakeit.Number(1, 8),
             }
+
             _, err := db.Model(character).Insert()
             if err != nil {
                 fmt.Println("Error inserting character:", err)
                 return
             }
 
-            //each character, generate random scores
+            ///////////////////////////each character, generate scores 100-1000
 
             for k := 0; k < 10; k++ {
-                score := &Score{
+                score := &Scores{
                     CharID:      character.CharID,
-                    RewardScore: gofakeit.Number(100, 1000), // Random score between 100 and 1000
+                    RewardScore: gofakeit.Number(100, 1000),
                 }
                 _, err := db.Model(score).Insert()
                 if err != nil {
@@ -135,4 +134,14 @@ func generateFakeData(db *pg.DB) {
         }
     }
     fmt.Println("Data generation complete!")
+}
+
+func main() {
+    db := connect()
+    if db == nil {
+        return /////////////////// Exit if connection failed
+    }
+
+    createTables(db)
+    generateFakeData(db)
 }
