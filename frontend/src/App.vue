@@ -1,26 +1,29 @@
 <template>
-  <img alt="Vue logo" src="./assets/logo.png">
-  <HelloWorld msg="Welcome to Your Vue.js App"/>
+  <div id="app">
+    <img src="./assets/wira-logo.png" alt="WIRA" style="width:10%; min-width: 120px; margin-top: 3rem; justify-content: center; align-items: center;">
+    <h1>GLOBAL RANKING</h1>
+    <img src="./assets/text-underline.png" alt="underline" style="width: 20%; min-width: 300px">
+    <PlayerSearch @search="handleSearch" />
+    <PlayerList ref="playerList" />
+  </div>
 </template>
 
 <script>
-import HelloWorld from './components/HelloWorld.vue'
+import PlayerList from './components/PlayerList.vue';
+import PlayerSearch from './components/PlayerSearch.vue';
+import '@/assets/css/main.css'
 
 export default {
   name: 'App',
   components: {
-    HelloWorld
+    PlayerList,
+    PlayerSearch
+  },
+  methods: {
+    handleSearch(searchTerm) {
+
+      this.$refs.playerList.handleSearch(searchTerm);
+    }
   }
 }
 </script>
-
-<style>
-#app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-align: center;
-  color: #2c3e50;
-  margin-top: 60px;
-}
-</style>
