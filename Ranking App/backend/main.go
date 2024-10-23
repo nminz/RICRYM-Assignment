@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"math"
 	"net/http"
@@ -13,17 +15,24 @@ import (
 	"github.com/go-pg/pg/v10"
 	"github.com/go-pg/pg/v10/orm"
 	"github.com/patrickmn/go-cache"
+
+	//// 2FA ////
+	"github.com/pquerna/otp/totp"
+	"golang.org/x/crypto/bcrypt"
 )
 
-/////////////////////////// 'Accounts' table model
+//////////// 'Accounts' table model (added 2FA but failed, ignore the pass, 2fa and salt) ////////////
 
 type Accounts struct {
-	AccID    int64  `pg:"acc_id,pk"`
-	Username string `pg:"username"`
-	Email    string `pg:"email"`
+	AccID             int64  `pg:"acc_id,pk"`
+	Username          string `pg:"username"`
+	Email             string `pg:"email"`
+	EncryptedPassword string `pg:"encrypted_password"`
+	SecretKey2FA      string `pg:"secretkey_2fa"`
+	Salt              string `pg:"salt"`
 }
 
-/////////////////////////// 'Characters' table model
+//////////// 'Characters' table model ////////////
 
 type Characters struct {
 	CharID  int64 `pg:"char_id,pk"`
@@ -31,7 +40,7 @@ type Characters struct {
 	ClassID int   `pg:"class_id"`
 }
 
-/////////////////////////// 'Scores' table model
+//////////// 'Scores' table model ////////////
 
 type Scores struct {
 	ScoreID     int64 `pg:"score_id,pk"`
@@ -39,7 +48,15 @@ type Scores struct {
 	RewardScore int   `pg:"reward_score"`
 }
 
-/////////////////////////// connect to PostgreSQL
+//////////// 'Session' table model ////////////
+
+type Session struct {
+	SessionID       int64     `pg:"session_id,pk"`
+	SessionMetadata string    `pg:"session_metadata"`
+	ExpiryDatetime  time.Time `pg:"expiry_datetime"`
+}
+
+////////////////////////////////////////////////////////////// connect to PostgreSQL
 
 func connect() *pg.DB {
 	db := pg.Connect(&pg.Options{
@@ -86,9 +103,10 @@ func createTables(db *pg.DB) {
 	fmt.Println("Tables checked and created if not existed successfully!")
 }
 
-///////////////////////////// generate fake data
+/////////////////////////////// GENERATING FAKE DATA \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
 
 func generateFakeData(db *pg.DB) {
+
 	//////////////////////////// check if accounts already exist
 
 	count, err := db.Model((*Accounts)(nil)).Count()
@@ -148,7 +166,7 @@ func generateFakeData(db *pg.DB) {
 	fmt.Println("Data generation complete!")
 }
 
-////////////////////////////////////// PAGINATION ///////////////////////////////////////////
+////////////////////////////////////// PAGINATION \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
 
 type AccountWithClassAndScore struct {
 	AccID    int64  `json:"AccID"`
@@ -176,7 +194,7 @@ func paginatedAccounts(db *pg.DB, c *gin.Context) ([]AccountWithClassAndScore, i
 	}
 	offset := (page - 1) * limit
 
-	//////////////////////////////////////////////////// RANKING ///////////////////////////////////////////////////////////
+	////////////////////////////////// RANKING \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
 
 	baseQuery := `
         WITH ranked_accounts AS (
@@ -240,6 +258,7 @@ func paginatedAccounts(db *pg.DB, c *gin.Context) ([]AccountWithClassAndScore, i
 	}
 
 	// Count total filtered results for pagination
+
 	var total int
 	countQuery := `
         WITH ranked_accounts AS (
@@ -269,41 +288,60 @@ func paginatedAccounts(db *pg.DB, c *gin.Context) ([]AccountWithClassAndScore, i
 	return results, total, totalPages, nil
 }
 
-////////////////////////////////////// MAIN FUNCTION START ///////////////////////////////////////////
+////////////////////////////////////// SALTING FUNCTION \\\\\\\\\\\\\\\ failed. ignore this function //////////////////////////
+
+func hashPassword(password string) (string, string, error) {
+	// Generate a random salt
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", "", err
+	}
+	saltStr := base64.StdEncoding.EncodeToString(salt)
+
+	// Combine password with salt and hash
+	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(password+saltStr), bcrypt.DefaultCost)
+	if err != nil {
+		return "", "", err
+	}
+
+	return string(hashedPassword), saltStr, nil
+}
+
+////////////////////////////////////// MAIN FUNCTION START \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
 
 func main() {
 	db := connect()
 	if db == nil {
-		return /////////////////// Exit if connection failed
+		return ////////// Exit if connection failed
 	}
 
 	createTables(db)
 	generateFakeData(db)
 
-	////////////////////////////////////// MAIN FUNCTION END ///////////////////////////////////////////
-
-	////////////////////////////////////////// CACHING START //////////////////////////////////////////
+	////////////////////////////////////////// CACHING START \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
 
 	cacheInstance := cache.New(5*time.Minute, 10*time.Minute)
-
 	r := gin.Default()
-
 	r.Use(cors.Default())
 
 	////////////////////////////////// Route for paginated accounts with caching
 
 	r.GET("/accounts", func(c *gin.Context) {
+
 		// Create a cache key based on the page, limit, and search query parameters
+
 		cacheKey := fmt.Sprintf("accounts_page_%s_limit_%s_search_%s_sort_%s_order_%s",
 			c.Query("page"), c.Query("limit"), c.Query("search"), c.Query("sort"), c.Query("order"))
 
 		// Check if cached data exists
+
 		if cachedData, found := cacheInstance.Get(cacheKey); found {
 			c.JSON(http.StatusOK, cachedData)
 			return
 		}
 
 		// Fetch paginated accounts from the database
+
 		accounts, total, totalPages, err := paginatedAccounts(db, c)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Error fetching accounts"})
@@ -311,6 +349,7 @@ func main() {
 		}
 
 		// Prepare response data
+
 		response := gin.H{
 			"data":        accounts,
 			"page":        c.Query("page"),
@@ -320,13 +359,106 @@ func main() {
 		}
 
 		// Cache the response data
+
 		cacheInstance.Set(cacheKey, response, cache.DefaultExpiration)
 
 		// Send response
+
 		c.JSON(http.StatusOK, response)
+	})
+
+	///////////////////////////////////////////// LOGIN AND 2FA \\\\\\\\\\\ tried integrating login and 2fa here but failed.///////////////////
+
+	r.POST("/login", func(c *gin.Context) {
+		var input struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+			TwoFA    string `json:"twofa"`
+		}
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input"})
+			return
+		}
+
+		// Find the user by username
+		var account Accounts
+		err := db.Model(&account).Where("username = ?", input.Username).Select()
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+			return
+		}
+
+		// Validate password
+		if err := bcrypt.CompareHashAndPassword(
+			[]byte(account.EncryptedPassword),
+			[]byte(input.Password+account.Salt),
+		); err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid password"})
+			return
+		}
+
+		// Validate 2FA code
+		valid := totp.Validate(input.TwoFA, account.SecretKey2FA)
+		if !valid {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid 2FA code"})
+			return
+		}
+
+		// Create a new session (optional)
+		session := Session{
+			SessionMetadata: input.Username,
+			ExpiryDatetime:  time.Now().Add(30 * time.Minute),
+		}
+		_, err = db.Model(&session).Insert()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not create session"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "Login successful"})
+	})
+
+	////////////////////////////////// Endpoint to generate a 2FA secret
+	r.POST("/generate-2fa", func(c *gin.Context) {
+		var input struct {
+			Username string `json:"username"`
+		}
+		if err := c.ShouldBindJSON(&input); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid input"})
+			return
+		}
+
+		// Find the user
+		var account Accounts
+		err := db.Model(&account).Where("username = ?", input.Username).Select()
+		if err != nil {
+			c.JSON(http.StatusUnauthorized, gin.H{"error": "User not found"})
+			return
+		}
+
+		// Generate 2FA secret
+		secret := totp.GenerateOpts{
+			Issuer:      "WIRA",
+			AccountName: account.Username,
+		}
+		otpKey, err := totp.Generate(secret)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not generate 2FA key"})
+			return
+		}
+
+		// Save the secret key in the database
+		account.SecretKey2FA = otpKey.Secret()
+		_, err = db.Model(&account).Where("username = ?", account.Username).Update()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Could not update user"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"message": "2FA secret generated", "key": otpKey.URL()})
 	})
 
 	r.Run(":8080")
 }
 
-////////////////////////////////////////// CACHING END //////////////////////////////////////////
+////////////////////////////////////////// CACHING END \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\
